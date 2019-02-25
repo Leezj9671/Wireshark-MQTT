@@ -18,8 +18,9 @@
 
 do
 	-- Create a new dissector
+	print("MQTT-FB dessector inside")
 	MQTTPROTO = Proto("MQTT-FB", "Facebook MQTT")
-	local bitw = require("bit")
+	local bitw = require("bit32")
 	local f = MQTTPROTO.fields
 	-- Fix header: byte 1
 	f.message_type = ProtoField.uint8("mqttfb.message_type", "Message Type", base.HEX, nil, 0xF0)
@@ -55,7 +56,8 @@ do
 	f.suback_message_id = ProtoField.uint16("mqttfb.suback.message_id", "Message ID")
 	f.suback_qos = ProtoField.uint8("mqttfb.suback.qos", "QoS")
 	--
-	f.payload_data = ProtoField.bytes("mqttfb.payload", "Payload Data")
+	f.payload_re_data = ProtoField.bytes("mqttfb.payload.regular", "Payload Regular Data")
+	f.payload_data = ProtoField.bytes("mqttfb.payload", "Payload Uncompress Data")
 
 	-- decoding of fixed header remaining length
 	-- according to MQTT V3.1
@@ -145,14 +147,19 @@ do
 			flags_subtree:add(f.connect_clean_session, flags)
 
 			varheader_subtree:add(f.connect_keep_alive, keepalive)
-
+			local payload_re_subtree = subtree:add("Payload Regular", nil)
 			local payload_subtree = subtree:add("Payload", nil)
 
 			local data_len = remain_length - (offset - varhdr_init)
 			local data = buffer(offset, data_len)
 
+			data_uncompress = data:uncompress()
+
 			offset = offset + data_len
-			payload_subtree:add(f.payload_data, data:uncompress())
+			payload_re_subtree:add(f.payload_re_data, data)
+			payload_subtree:add(f.payload_data, data_uncompress)
+
+
 
 
 		elseif(msgindex == 3) then -- PUBLISH
@@ -175,16 +182,34 @@ do
 			local payload_subtree = subtree:add("Payload", nil)
 			-- Data
 			local data_len = remain_length - (offset - varhdr_init)
-			local data = buffer(offset, data_len):uncompress()
+			-- print('start debuging----')
+			-- print(remain_length)
+
+			-- print(topic)
+			if topic == "2f745f6f6d6e6973746f72655f73796e63" then
+				print(offset)
+				print(data_len)
+			end
+
+			-- print(varhdr_init)
+			local data = buffer(offset, data_len)
+			-- if data(0, 1):string() == '{' then
+			-- 	Dissector.get("json"):call(data, pinfo, tree)
+			-- end
+			-- print(Struct.fromhex(data))
+			payload_subtree:add(f.payload_re_data, data)
+			data = data:uncompress()
+
+			-- print('end debuging----')
 			offset = offset + data_len
 
-			local tvbdata = data:tvb()
-
-			if tvbdata(0, 1):string() == '{' then
-				Dissector.get("json"):call(tvbdata, pinfo, tree)
+			if data ~= nil then
+				local tvbdata = data:tvb()
+				if tvbdata(0, 1):string() == '{' then
+					Dissector.get("json"):call(tvbdata, pinfo, tree)
+				end
+				payload_subtree:add(f.payload_data, data)
 			end
-			payload_subtree:add(f.payload_data, data)
-
 		elseif(msgindex == 4) then -- PUBACK
 			message_id = buffer(offset, 2)
 			offset = offset + 2
@@ -244,6 +269,10 @@ do
 	end
 
 	-- Register the dissector
-	tcp_table = DissectorTable.get("ssl.port")
+	-- tcp_table = DissectorTable.get("ssl.port")
+	-- tcp_table:add(443, MQTTPROTO)
+	-- tcp_table:add(32763, MQTTPROTO)
+	tcp_table = DissectorTable.get("tcp.port")
 	tcp_table:add(443, MQTTPROTO)
+	tcp_table:add(32763, MQTTPROTO)
 end
